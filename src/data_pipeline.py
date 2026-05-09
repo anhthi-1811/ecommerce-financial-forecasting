@@ -1,125 +1,230 @@
 import pandas as pd
 import numpy as np
 import warnings
-warnings.filterwarnings('ignore')
+import logging
+from typing import Optional
 
-class SalesDataPipeline:
+warnings.filterwarnings("ignore")
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(levelname)s - %(message)s"
+)
+
+class SalesDataPipeline: 
     """
-    Module 1: Pipeline xử lý dữ liệu gốc (sales.csv)
-    Bao gồm các bước Kiểm tra (Inspect) -> Ra quyết định -> Xử lý (Fix)
+    Sales Data Processing Pipeline
+
+    Workflow:
+    1. Load datasets
+    2. Validate schema
+    3. Inspect & repair time-series continuity
+    4. Inspect & handle anomalies
+    5. Generate master dataset
+    6. Create time-series baseline features (Leakage-free)
     """
-    
-    def __init__(self, train_path, test_path):
+
+    def __init__(
+        self,
+        train_path: str,
+        test_path: str,
+        outlier_multiplier: int = 20,
+        winsorize_quantile: float = 0.99
+    ):
         self.train_path = train_path
         self.test_path = test_path
-        self.train_df = None
-        self.test_df = None
-        self.master_df = None
-        
-    def load_data(self):
-        """Bước 1: Nạp dữ liệu vào bộ nhớ"""
-        print("[1/4] Đang nạp dữ liệu...")
+        self.outlier_multiplier = outlier_multiplier
+        self.winsorize_quantile = winsorize_quantile
+
+        self.train_df: Optional[pd.DataFrame] = None
+        self.test_df: Optional[pd.DataFrame] = None
+        self.master_df: Optional[pd.DataFrame] = None
+
+    # =========================================================
+    # STEP 1 — LOAD DATA
+    # =========================================================
+    def load_data(self) -> "SalesDataPipeline":
+        logging.info("[1/6] Loading datasets...")
+
         self.train_df = pd.read_csv(self.train_path)
         self.test_df = pd.read_csv(self.test_path)
-        
-        self.train_df['Date'] = pd.to_datetime(self.train_df['Date'])
-        self.test_df['Date'] = pd.to_datetime(self.test_df['Date'])
+
+        # Convert Date column to datetime
+        self.train_df["Date"] = pd.to_datetime(self.train_df["Date"])
+        self.test_df["Date"] = pd.to_datetime(self.test_df["Date"])
+
+        logging.info("Datasets loaded successfully.")
         return self
 
-    def inspect_and_fix_dates(self):
-        """Bước 2: KIỂM TRA VÀ XỬ LÝ CHUỖI THỜI GIAN"""
-        print("\n[2/4] Đang chẩn đoán Trục thời gian...")
-        df = self.train_df
-        
-        # 1. KKiểm tra: Có bị thiếu ngày nào không? 
-        min_date, max_date = df['Date'].min(), df['Date'].max()
+    # =========================================================
+    # STEP 2 — VALIDATE SCHEMA
+    # =========================================================
+    def validate_schema(self) -> "SalesDataPipeline":
+        logging.info("[2/6] Validating dataset schema...")
+
+        required_columns = ["Date", "Revenue", "COGS"]
+
+        for col in required_columns:
+            if col not in self.train_df.columns:
+                raise ValueError(f"Missing required column in train set: {col}")
+
+        if "Date" not in self.test_df.columns:
+            raise ValueError("Missing required column in test set: Date")
+
+        logging.info("Schema validation passed.")
+        return self
+
+    # =========================================================
+    # STEP 3 — INSPECT & FIX TIME SERIES
+    # =========================================================
+    def inspect_and_fix_dates(self) -> "SalesDataPipeline":
+        logging.info("[3/6] Inspecting time-series continuity...")
+
+        df = self.train_df.copy()
+        df = df.sort_values("Date").reset_index(drop=True)
+
+        min_date = df["Date"].min()
+        max_date = df["Date"].max()
+
         expected_days = (max_date - min_date).days + 1
-        actual_days = df['Date'].nunique()
+        actual_days = df["Date"].nunique()
         missing_days = expected_days - actual_days
-        
-        print(f"   -> Giai đoạn: {min_date.date()} đến {max_date.date()}")
-        print(f"   -> Số ngày thực tế / Kỳ vọng: {actual_days} / {expected_days}")
-        
-        # 2. Ra quyết định & Xử lý
+
         if missing_days > 0:
-            print(f"   PHÁT HIỆN LỖI: Thiếu {missing_days} ngày trong lịch sử!")
-            print("   Quyết định: Tạo các ngày bị thiếu và điền Doanh thu/Giá vốn = 0.") 
-            
-            full_date_range = pd.date_range(start=min_date, end=max_date, freq='D')
-            df = df.set_index('Date').reindex(full_date_range).reset_index()
-            df = df.rename(columns={'index': 'Date'})
-            df['Revenue'] = df['Revenue'].fillna(0)
-            df['COGS'] = df['COGS'].fillna(0)
+            logging.warning(f"Detected {missing_days} missing day(s) in the timeline.")
+            logging.info("Creating missing dates and filling financial values with zero.")
+
+            full_date_range = pd.date_range(start=min_date, end=max_date, freq="D")
+            df = (
+                df.set_index("Date")
+                .reindex(full_date_range)
+                .reset_index()
+                .rename(columns={"index": "Date"})
+            )
+
+            df["Revenue"] = df["Revenue"].fillna(0)
+            df["COGS"] = df["COGS"].fillna(0)
         else:
-            print("Chuỗi thời gian hoàn toàn liền mạch.")
-            
+            logging.info("Time series is fully continuous.")
+
+        df = df.sort_values("Date").reset_index(drop=True)
         self.train_df = df
+
         return self
 
-    def inspect_and_fix_anomalies(self):
-        """Bước 3: KIỂM TRA VÀ XỬ LÝ DỮ LIỆU DỊ THƯỜNG (TRÙNG/ÂM/NGOẠI LAI)"""
-        print("\n[3/4] Đang chẩn đoán Dữ liệu dị thường (Anomalies)...")
-        df = self.train_df
-        
-        # 1. Kiểm tra Trùng lặp
-        duplicates = df.duplicated(subset=['Date']).sum()
+    # =========================================================
+    # STEP 4 — INSPECT & FIX ANOMALIES
+    # =========================================================
+    def inspect_and_fix_anomalies(self) -> "SalesDataPipeline":
+        logging.info("[4/6] Inspecting anomalous data...")
+        df = self.train_df.copy()
+
+        # 1. Duplicate Detection
+        duplicates = df.duplicated(subset=["Date"]).sum()
         if duplicates > 0:
-            print(f"PHÁT HIỆN LỖI: Có {duplicates} ngày bị nhập trùng lặp (Double entry)!")
-            print("Quyết định: Xóa dòng trùng, chỉ giữ lại 1 dòng duy nhất.")
-            df = df.drop_duplicates(subset=['Date'], keep='last')
-        else:
-            print("Không có dữ liệu trùng lặp.")
-            
-        # 2. Kiểm tra Giá trị Âm (Doanh thu/Giá vốn không thể âm)
-        negative_rev = (df['Revenue'] < 0).sum()
-        negative_cogs = (df['COGS'] < 0).sum()
-        if negative_rev > 0 or negative_cogs > 0:
-            print(f"PHÁT HIỆN LỖI: Có số liệu ÂM ({negative_rev} dòng Revenue, {negative_cogs} dòng COGS)!")
-            print("Quyết định: Ép các số âm này về 0 (Clipping lower bounds).")
-            df['Revenue'] = df['Revenue'].clip(lower=0)
-            df['COGS'] = df['COGS'].clip(lower=0)
-        else:
-            print("Không có giá trị tài chính âm.")
+            logging.warning(f"Detected {duplicates} duplicate date entries.")
+            df = df.drop_duplicates(subset=["Date"], keep="last")
+        
+        # 2. Negative Values
+        negative_revenue = (df["Revenue"] < 0).sum()
+        negative_cogs = (df["COGS"] < 0).sum()
+        if negative_revenue > 0 or negative_cogs > 0:
+            logging.warning(f"Negative values detected (Revenue={negative_revenue}, COGS={negative_cogs}).")
+            df["Revenue"] = df["Revenue"].clip(lower=0)
+            df["COGS"] = df["COGS"].clip(lower=0)
 
-        # 3. Kiểm tra Ngoại lai (Outliers)
-        # Kiểm tra xem giá trị Max có lớn bất thường so với mức trung bình (mean) hay không
-        rev_mean = df['Revenue'].mean()
-        rev_max = df['Revenue'].max()
-        if rev_max > rev_mean * 20: # Nếu có ngày bán gấp 20 lần trung bình
-            print(f"CẢNH BÁO: Phát hiện ngày có doanh thu khổng lồ (Max = {rev_max:.2f}, Mean = {rev_mean:.2f}).")
-            print("Quyết định: Cắt ngọn (Winsorization) ở mốc 99th percentile để tránh mô hình bị nhiễu.")
-            upper_limit = df['Revenue'].quantile(0.99)
-            df['Revenue'] = df['Revenue'].clip(upper=upper_limit)
-            df['COGS'] = df['COGS'].clip(upper=df['COGS'].quantile(0.99))
-            print(f"      Đã giới hạn trần Doanh thu ở mức: {upper_limit:.2f}")
-        else:
-            print("Không phát hiện ngoại lai gây nhiễu nghiêm trọng.")
+        # 3. Outlier Detection (Winsorization)
+        revenue_mean = df["Revenue"].mean()
+        revenue_max = df["Revenue"].max()
+
+        if revenue_max > revenue_mean * self.outlier_multiplier:
+            logging.warning(f"Extreme outlier detected (Max={revenue_max:.2f}, Mean={revenue_mean:.2f}).")
             
-        self.train_df = df
+            revenue_upper = df["Revenue"].quantile(self.winsorize_quantile)
+            cogs_upper = df["COGS"].quantile(self.winsorize_quantile)
+
+            df["Revenue"] = df["Revenue"].clip(upper=revenue_upper)
+            df["COGS"] = df["COGS"].clip(upper=cogs_upper)
+
+        self.train_df = df.sort_values("Date").reset_index(drop=True)
         return self
 
-    def prepare_master_data(self):
-        """Bước 4: GHÉP NỐI VÀ TẠO ĐẶC TRƯNG NỀN TẢNG"""
-        print("\n[4/4] Đang tổng hợp Master Data và trích xuất đặc trưng...")
-        
-        # 1. Gắn cờ và gộp Train + Test
-        self.train_df['is_test'] = 0
-        test_dates = self.test_df[['Date']].copy()
-        test_dates['is_test'] = 1
-        
+    # =========================================================
+    # STEP 5 — PREPARE MASTER DATA
+    # =========================================================
+    def prepare_master_data(self) -> pd.DataFrame:
+        logging.info("[5/6] Building master dataset...")
+
+        self.train_df["is_test"] = 0
+        test_dates = self.test_df[["Date"]].copy()
+        test_dates["is_test"] = 1
+
         self.master_df = pd.concat([self.train_df, test_dates], axis=0, ignore_index=True)
-        
-        # 2. Bóc tách thời gian
-        df = self.master_df
-        df['day_of_week'] = df['Date'].dt.dayofweek 
-        df['day_of_month'] = df['Date'].dt.day
-        df['month'] = df['Date'].dt.month
-        df['year'] = df['Date'].dt.year
-        df['is_weekend'] = df['day_of_week'].isin([5, 6]).astype(int)
-        
-        # Ép kiểu Category cho LightGBM
-        for col in ['day_of_week', 'month', 'year']:
-            df[col] = df[col].astype('category')
-            
-        print("HOÀN TẤT GIAI ĐOẠN 1: Dữ liệu đã sẵn sàng để Feature Engineering!")
+        self.master_df = self.master_df.sort_values("Date").reset_index(drop=True)
+
         return self.master_df
+
+    # =========================================================
+    # STEP 6 — FEATURE ENGINEERING (LEAKAGE SAFE)
+    # =========================================================
+    def create_time_features(self) -> pd.DataFrame:
+        logging.info("[6/6] Creating time-series baseline features...")
+        df = self.master_df.copy()
+
+        # Calendar Features
+        df["day_of_week"] = df["Date"].dt.dayofweek
+        df["day_of_month"] = df["Date"].dt.day
+        df["month"] = df["Date"].dt.month
+        df["quarter"] = df["Date"].dt.quarter
+        df["year"] = df["Date"].dt.year
+        df["week_of_year"] = df["Date"].dt.isocalendar().week.astype(int)
+
+        df["is_weekend"] = df["day_of_week"].isin([5, 6]).astype(int)
+        df["is_month_start"] = df["Date"].dt.is_month_start.astype(int)
+        df["is_month_end"] = df["Date"].dt.is_month_end.astype(int)
+
+        # Lag & Rolling Features (CRITICAL: MUST SHIFT BEFORE ROLLING/PCT_CHANGE)
+        if "Revenue" in df.columns:
+            df["revenue_lag_1"] = df["Revenue"].shift(1)
+            df["revenue_lag_7"] = df["Revenue"].shift(7)
+            df["revenue_lag_30"] = df["Revenue"].shift(30)
+
+            # Fix Leakage: Shift by 1 first, then apply rolling window
+            df["rolling_mean_7"] = df["Revenue"].shift(1).rolling(window=7).mean()
+            df["rolling_std_7"] = df["Revenue"].shift(1).rolling(window=7).std()
+
+            # Fix Leakage: Shift by 1 first, then apply pct_change (calculates previous day's growth rate)
+            df["revenue_growth_rate"] = df["Revenue"].shift(1).pct_change()
+
+        # Convert categorical columns
+        categorical_cols = ["day_of_week", "month", "quarter", "year"]
+        for col in categorical_cols:
+            df[col] = df[col].astype("category")
+
+        self.master_df = df
+        logging.info("Feature engineering completed successfully.")
+        return self.master_df
+
+# =============================================================
+# PIPELINE EXECUTION
+# =============================================================
+if __name__ == "__main__":
+    pipeline = (
+        SalesDataPipeline(
+            train_path="data/sales.csv", # Cập nhật đường dẫn file của bạn
+            test_path="data/sample_submission.csv",
+            outlier_multiplier=20,
+            winsorize_quantile=0.99
+        )
+        .load_data()
+        .validate_schema()
+        .inspect_and_fix_dates()
+        .inspect_and_fix_anomalies()
+    )
+
+    pipeline.prepare_master_data()
+    final_df = pipeline.create_time_features()
+
+    print("\nFinal Dataset Preview:")
+    print(final_df.head())
