@@ -64,26 +64,19 @@ class FinancialForecaster:
         self.predictions: Dict = {}
         self.trained_models: Dict = {}
         
-        # ----------------------------------------------------------------------
-        # Model Configuration
-        # If custom_models is provided (from Optuna), use them!
-        # Otherwise, fallback to a robust Base LightGBM.
-        # ----------------------------------------------------------------------
-        if custom_models is not None:
-            self.model_configs = custom_models
-            logging.info("Initialized with custom optimized models.")
+        self.custom_models = custom_models or {}
+        
+        if self.custom_models:
+            logging.info("Initialized with custom optimized models from Main Pipeline.")
         else:
             base_model = lgb.LGBMRegressor(
                 random_state=42, n_estimators=450, learning_rate=0.04,
                 num_leaves=31, colsample_bytree=0.8, verbose=-1
             )
-            # Duplicate the base model for all targets
-            self.model_configs = {target.replace("_Log", ""): copy.deepcopy(base_model) for target in self.targets}
+            # Duplicate the base model for all targets as fallback
+            self.custom_models = {target.replace("_Log", ""): copy.deepcopy(base_model) for target in self.targets}
             logging.info("Initialized with default Base LightGBM models.")
 
-    # ==========================================================================
-    # STEP 1 — PREPARE DATA
-    # ==========================================================================
     # ==========================================================================
     # STEP 1 — PREPARE DATA
     # ==========================================================================
@@ -109,7 +102,7 @@ class FinancialForecaster:
         for col in cat_features:
             self.data[col] = self.data[col].astype(int).astype("category")
 
-        # Đảm bảo 'year' là dạng số nguyên (Integer) để hiểu được sự tăng trưởng
+        # Ensure 'year' is treated as integer to capture growth trend
         if "year" in self.data.columns:
             self.data["year"] = self.data["year"].astype(int)
 
@@ -138,12 +131,11 @@ class FinancialForecaster:
         for target in self.targets:
             logging.info(f"Training target: {target}")
             
-            # Lấy mô hình Quán quân tương ứng cho từng biến
-            if target == 'Revenue_Log':
-                model = self.custom_models['Revenue']
-            else:
-                model = self.custom_models['COGS']
+            # Retrieve the appropriate Champion model
+            actual_target_name = target.replace('_Log', '')
+            model = self.custom_models[actual_target_name]
 
+            # Split Train/Val for Early Stopping (85/15 chronological split)
             split_idx = int(len(self.X_train) * 0.85)
             
             X_sub_train = self.X_train.iloc[:split_idx]
@@ -152,7 +144,7 @@ class FinancialForecaster:
             X_sub_val = self.X_train.iloc[split_idx:]
             y_sub_val = self.df_past[target].iloc[split_idx:]
 
-            # Early Stopping 
+            # Train with Early Stopping
             try:
                 model.fit(
                     X_sub_train, y_sub_train,
@@ -161,16 +153,15 @@ class FinancialForecaster:
                     verbose=False 
                 )
             except TypeError:
-    
+                # Fallback for models or older sklearn versions that don't support early stopping natively
                 logging.warning(f"Early stopping unsupported via standard fit for {target}. Falling back to default fit.")
                 model.fit(self.X_train, self.df_past[target])
 
+            # Generate log-scale predictions
             log_preds = model.predict(self.X_test)
-
             self.trained_models[target] = model
 
             # Reverse log1p transformation (e^x - 1) and prevent negative predictions
-            actual_target_name = target.replace('_Log', '')
             self.predictions[actual_target_name] = np.maximum(0, np.expm1(log_preds))
 
         return self 
@@ -178,7 +169,7 @@ class FinancialForecaster:
     # ==========================================================================
     # STEP 3 — EXPORT FORECAST REPORT
     # ==========================================================================
-    def generate_report(self, export_path: str = "output/submission_hybrid.csv") -> pd.DataFrame:
+    def generate_report(self, export_path: str = "output/submission.csv") -> pd.DataFrame:
         """
         Generate final forecasting report and export submission CSV.
         """
@@ -193,7 +184,8 @@ class FinancialForecaster:
         submission.to_csv(export_path, index=False)
         logging.info(f"Submission file saved to: {export_path}")
         
-        print("\n--- FORECAST PREVIEW ---")
+        from IPython.display import display # Import locally to avoid issues in pure python scripts
+        print("\n--- FINAL FORECAST PREVIEW ---")
         display(submission.head(10))
 
         return submission 
