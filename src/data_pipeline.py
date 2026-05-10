@@ -212,7 +212,7 @@ class SalesDataPipeline:
 if __name__ == "__main__":
     pipeline = (
         SalesDataPipeline(
-            train_path="data/sales.csv", # Cập nhật đường dẫn file của bạn
+            train_path="data/sales.csv", 
             test_path="data/sample_submission.csv",
             outlier_multiplier=20,
             winsorize_quantile=0.99
