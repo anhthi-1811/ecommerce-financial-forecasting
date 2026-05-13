@@ -120,14 +120,30 @@ TARGET_COLS = Revenue, COGS
 ```
 
 ## Evaluation Metrics
-- The following insights were derived during the Optuna Hyperparameter Tuning phase, utilizing Tree-based ensemble architectures with 50-round Early Stopping.
+- The following performance metrics were recorded during the Optuna Hyperparameter Tuning phase. Each model was evaluated on the Validation set using **RMSE (Root Mean Square Error)** as the primary selection criterion.
   ### Arena 1: Revenue Forecasting
-  - Champion Model: `XGBoost` 
+  | Rank | Model | RMSE | MAE | R² Score |
+  |:---:|:---|:---:|:---:|:---:|
+  | **1** | **XGBoost (Optuna Tuned)** | **655,648.48** | **485,726.78** | **0.7205** |
+  | 2 | CatBoost (Default) | 670,734.49 | 479,564.81 | 0.7074 |
+  | 3 | LightGBM (Default) | 671,170.28 | 500,691.10 | 0.7071 |
+  | 4 | CatBoost (Optuna Tuned) | 672,389.03 | 487,053.83 | 0.7060 |
+  | 5 | LightGBM (Optuna Tuned) | 674,212.13 | 506,901.80 | 0.7044 |
+  | 6 | XGBoost (Default) | 682,834.53 | 491,988.16 | 0.6968 |
 
-  - **Analysis**: Revenue data exhibits high volatility driven by promotional spikes and seasonal surges. XGBoost's advanced regularization mechanisms effectively handled these sudden variance spikes (outliers), resulting in the lowest RMSE among all benchmarking models.
+> **Champion Model:** `XGBoost_Optuna_Tuned` exhibited the best generalization on Revenue spikes by effectively utilizing its gradient boosting regularization. 
+
   ### Arena 2: COGS Forecasting
-  - Champion Model: `LightGBM` 
-  - **Analysis**: LightGBM's leaf-wise tree growth strategy demonstrated exceptional sensitivity to inventory depletion dynamics and cost fluctuations. The model successfully captured subtle operational micro-patterns, outperforming both XGBoost and CatBoost for COGS forecasting.
+  | Rank | Model | RMSE | MAE | R² Score |
+  |:---:|:---|:---:|:---:|:---:|
+  | **1** | **LightGBM (Optuna Tuned)** | **596,111.28** | **470,845.26** | **0.6802** |
+  | 2 | CatBoost (Default) | 600,115.95 | 446,623.20 | 0.6759 |
+  | 3 | XGBoost (Optuna Tuned) | 602,514.37 | 460,584.67 | 0.6733 |
+  | 4 | LightGBM (Default) | 602,920.75 | 466,821.20 | 0.6729 | 
+  | 5 | CatBoost (Optuna Tuned) | 608,972.99 | 459,019.29 | 0.6663 |
+  | 6 | XGBoost (Default) | 617,097.95 | 468,238.93 | 0.6573 |
+
+> **Champion Model:** `LightGBM_Optuna_Tuned` achieved the lowest error for COGS, demonstrating high sensitivity to cost-related patterns through its leaf-wise growth strategy.
 
 ## Business Insights (XAI)
 - By applying SHAP (SHapley Additive exPlanations), the models uncovered several critical strategic business drivers: 
